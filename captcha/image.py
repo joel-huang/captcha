@@ -22,7 +22,12 @@ except ImportError:
     wheezy_captcha = None
 
 DATA_DIR = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'data')
-DEFAULT_FONTS = [os.path.join(DATA_DIR, 'DroidSansMono.ttf')]
+FONT_NAMES = ['DroidSansMono.ttf','DroidSansMono.ttf','Merriweather-Bold.ttf',
+    'Merriweather-Regular.ttf','Roboto-Light.ttf','Roboto-Regular.ttf',
+    'RobotoSlab-Regular.ttf','Merriweather-Black.ttf','Merriweather-Light.ttf',
+    'Roboto-Black.ttf','Roboto-Medium.ttf','RobotoSlab-Bold.ttf']
+
+DEFAULT_FONTS = [os.path.join(DATA_DIR, name) for name in FONT_NAMES]
 
 if wheezy_captcha:
     __all__ = ['ImageCaptcha', 'WheezyCaptcha']
@@ -106,12 +111,14 @@ class ImageCaptcha(_Captcha):
     :param fonts: Fonts to be used to generate CAPTCHA images.
     :param font_sizes: Random choose a font size from this parameters.
     """
-    def __init__(self, width=160, height=60, fonts=None, font_sizes=None):
+    def __init__(self, width=160, height=60, fonts=None, font_sizes=None, curve=True, dots=True):
         self._width = width
         self._height = height
         self._fonts = fonts or DEFAULT_FONTS
         self._font_sizes = font_sizes or (42, 50, 56)
         self._truefonts = []
+        self._curve = curve
+        self._dots = dots
 
     @property
     def truefonts(self):
@@ -158,11 +165,12 @@ class ImageCaptcha(_Captcha):
         The color should be a tuple of 3 numbers, such as (0, 255, 255).
         """
         image = Image.new('RGB', (self._width, self._height), background)
+        font = random.choice(self.truefonts)
         draw = Draw(image)
 
-        def _draw_character(c):
+        def _draw_character(font, c):
             font = random.choice(self.truefonts)
-            w, h = draw.textsize(c, font=font)
+            w, h = draw.textsize(c, font)
 
             dx = random.randint(0, 4)
             dy = random.randint(0, 6)
@@ -193,10 +201,14 @@ class ImageCaptcha(_Captcha):
             return im
 
         images = []
+        char_list = []
+
         for c in chars:
             if random.random() > 0.5:
-                images.append(_draw_character(" "))
-            images.append(_draw_character(c))
+                images.append(_draw_character(font, " "))
+                char_list.append(" ")
+            images.append(_draw_character(font, c))
+            char_list.append(c)
 
         text_width = sum([im.size[0] for im in images])
 
@@ -207,28 +219,50 @@ class ImageCaptcha(_Captcha):
         rand = int(0.25 * average)
         offset = int(average * 0.1)
 
-        for im in images:
-            w, h = im.size
-            mask = im.convert('L').point(table)
-            image.paste(im, (offset, int((self._height - h) / 2)), mask)
+        bboxes = []
+
+        for i in range(len(images)):
+            w, h = images[i].size
+            mask = images[i].convert('L').point(table)
+            x1, y1 = offset, int((self._height - h) / 2)
+            x2, y2 = offset + w, int((self._height - h) / 2) + h
+            image.paste(images[i], (x1, y1), mask)
+
+            if char_list[i] is not " ":
+                bboxes.append([x1, y1, x2, y2])
+
             offset = offset + w + random.randint(-rand, 0)
 
         if width > self._width:
+            old_width, old_height = image.size
             image = image.resize((self._width, self._height))
+            new_width, new_height = image.size
+            width_scale = new_width / old_width
+            height_scale = new_height / old_height
+            for box in bboxes:
+                for index in range(len(box)):
+                    if index % 2:
+                        box[index] = int(box[index] * height_scale)
+                    else:
+                        box[index] = int(box[index] * width_scale)
 
-        return image
+        return image, bboxes
 
-    def generate_image(self, chars):
+    def generate_image(self, chars, bbox):
         """Generate the image of the given characters.
 
         :param chars: text to be generated.
         """
         background = random_color(238, 255)
         color = random_color(10, 200, random.randint(220, 255))
-        im = self.create_captcha_image(chars, color, background)
-        self.create_noise_dots(im, color)
-        self.create_noise_curve(im, color)
+        im, boxes = self.create_captcha_image(chars, color, background)
+        if self._dots:
+            self.create_noise_dots(im, color)
+        if self._curve:
+            self.create_noise_curve(im, color)
         im = im.filter(ImageFilter.SMOOTH)
+        if bbox:
+            return im, boxes
         return im
 
 
